@@ -472,6 +472,21 @@ if(FORM_ENDPOINT){
   document.head.appendChild(s);
 }
 
+/* Google Analytics 4. Loads only on the live host. Location, traffic source, device and engagement time come
+   from GA automatically; the custom events below record what visitors do on the page.
+   No names, emails, phone numbers or free-text answers are ever sent. */
+const GA_ID = "";   // e.g. "G-ABC123XYZ9"
+window.dataLayer = window.dataLayer || [];
+function gtag(){ dataLayer.push(arguments); }
+if(GA_ID && LIVE_HOSTS.includes(location.hostname)){
+  const g = document.createElement("script");
+  g.async = true; g.src = `https://www.googletagmanager.com/gtag/js?id=${GA_ID}`;
+  document.head.appendChild(g);
+  gtag("js", new Date());
+  gtag("config", GA_ID);
+}
+const track = (name, params = {}) => { if(GA_ID) gtag("event", name, params); };
+
 const CATS = {ext:"Exterior", liv:"Living & dining", kit:"Kitchen", bed:"Bedroom & laundry", bath:"Baths", cab:"Cockpit", sto:"Storage & bays", gau:"Gauges"};
 const PHOTOS = [
   [34,"ext","Front three-quarter, slides in"],[36,"ext","Slides and awnings out"],[35,"ext","Patio awning extended"],
@@ -519,6 +534,7 @@ function renderGrid(){
 $("filters").addEventListener("click", e => {
   const b = e.target.closest(".chip"); if(!b) return;
   filter = b.dataset.k; renderFilters(); renderGrid();
+  track("gallery_filter", {category: filter==="all" ? "All" : CATS[filter]});
 });
 $("grid").addEventListener("click", e => { const t = e.target.closest(".tile"); if(t) openLB(+t.dataset.i); });
 
@@ -530,6 +546,7 @@ function showLB(){
   $("lb-cap").textContent = p[2];
   $("lb-count").textContent = `${cur+1} / ${shown.length} · ${CATS[p[1]]}`;
   const nx = shown[(cur+1)%shown.length]; new Image().src = `img/p${pad(nx[0])}.jpg`;
+  track("photo_view", {photo_id: `p${pad(p[0])}`, photo_caption: p[2], photo_category: CATS[p[1]]});
 }
 function openLB(i){ lastFocus = document.activeElement; cur = i; showLB(); $("lb").hidden = false; document.body.style.overflow="hidden"; $("lb-close").focus(); }
 function closeLB(){ $("lb").hidden = true; document.body.style.overflow=""; if(lastFocus) lastFocus.focus(); }
@@ -553,12 +570,39 @@ $("chapters").addEventListener("click", e => {
   const c = CLIPS.find(x => x[0]===b.dataset.id), v = $("player");
   v.poster = `video/${c[0]}.jpg`; v.src = `video/${c[0]}.mp4`;
   $("now").textContent = c[1]; renderChapters(c[0]);
+  if(e.isTrusted) track("video_chapter_select", {video_title: c[1]});
   v.play().catch(()=>{});
 });
+const clipOf = () => CLIPS.find(c => $("player").src.endsWith(`${c[0]}.mp4`)) || CLIPS[0];
+const vidSeen = {};
+$("player").addEventListener("play", () => {
+  const c = clipOf(); if(vidSeen[c[0]]) return; vidSeen[c[0]] = {half:false};
+  track("video_start", {video_title: c[1]});
+});
+$("player").addEventListener("timeupdate", () => {
+  const v = $("player"), c = clipOf(), s = vidSeen[c[0]];
+  if(s && !s.half && v.duration && v.currentTime / v.duration >= 0.5){ s.half = true; track("video_progress", {video_title: c[1], video_percent: 50}); }
+});
 $("player").addEventListener("ended", () => {
+  track("video_complete", {video_title: clipOf()[1]});
   const i = CLIPS.findIndex(c => $("player").src.endsWith(`${c[0]}.mp4`));
   if(i>-1 && i<CLIPS.length-1) $("chapters").querySelector(`[data-id="${CLIPS[i+1][0]}"]`).click();
 });
+
+/* analytics: showing-request buttons, sections reached, form started */
+document.querySelectorAll('a.btn[href="#contact"]').forEach(a => a.addEventListener("click", () =>
+  track("request_showing_click", {button_location: a.closest("header") ? "top bar" : "price block"})));
+if("IntersectionObserver" in window){
+  /* a section counts once it has stayed on screen for a full second, so jump-scrolling past it doesn't */
+  const dwell = {};
+  const io = new IntersectionObserver(es => es.forEach(en => {
+    const id = en.target.id;
+    if(en.isIntersecting && !dwell[id]) dwell[id] = setTimeout(() => { track("section_view", {section_name: id}); io.unobserve(en.target); }, 1000);
+    else if(!en.isIntersecting && dwell[id]){ clearTimeout(dwell[id]); delete dwell[id]; }
+  }), {rootMargin: "-45% 0px -45% 0px"});   // "on screen" = crossing the middle band, which works for tall sections too
+  ["highlights","condition","photos","video","specs","contact"].forEach(id => $(id) && io.observe($(id)));
+}
+$("inquiry").addEventListener("focusin", () => track("showing_form_start", {form_name: "showing_request"}), {once: true});
 
 /* inquiry form */
 $("inquiry").addEventListener("submit", async e => {
@@ -587,6 +631,7 @@ $("inquiry").addEventListener("submit", async e => {
     const r = await fetch(FORM_ENDPOINT, {method:"POST", headers:{"Content-Type":"application/json","Accept":"application/json"}, body:JSON.stringify(data)});
     const j = await r.json().catch(()=>({}));
     if(!r.ok || j.success === false) throw new Error(j.message || r.status);
+    track("generate_lead", {form_name: "showing_request", payment_method: data.payment, buying_timeline: data.timeline, class_a_experience: data.experience});
     f.reset(); out.className = "form-msg ok"; out.textContent = "Request sent. I'll get back to you, usually within a day.";
   }catch(_){
     out.className = "form-msg warn"; out.textContent = "That didn't go through. Check your connection and try again in a minute.";
